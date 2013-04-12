@@ -1,10 +1,18 @@
-/* Layout:
+/* Disk layout:
 
-|      crc      |  kl   |       |
+24 byte header:
+
+|      crc      |  ver  |  kl   |
 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
 
-|      last     |     vlen      |
+|      vlen     |     flags     |
 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+
+|   previous_offset_in_bucket   |
+| 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+
+<kl-octet key>
+<vlen-octet value>
 
 */
 #include "springfield.h"
