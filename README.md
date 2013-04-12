@@ -17,3 +17,6 @@ count when you close/compress to get your performance
 back when the keyspace grows.  (use `springfield_seek_average()`
 to get back a heuristic that can help inform when it's time
 to close/compress/resize)
+
+Springfield also uses CRC sums to validate data
+integrity of keys/values on disk.
