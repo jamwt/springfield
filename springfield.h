@@ -3,32 +3,25 @@
 
 #include <inttypes.h>
 
-/* The whole system swings on this parameter...
-
-Set it to something large (128k to 256k buckets)
-for something with tens of millions of keys.
-256k will need at least ~1MB per database.
-
-Keep it small (8k) for very good performance with
-low memory overhead (<40kB) on embedded systems
-with less than 1M keys.
-*/
-#define NUMBUCKETS (1024 * 1024 * 50)
-
 /* This is your database, friend. */
 typedef struct springfield_t springfield_t;
 
 /* Create a database (in a single file) at `path`.
    If `path` does not exist, it will be created;
    otherwise, it will be loaded. */
-springfield_t * springfield_create(char *path);
+springfield_t * springfield_create(char *path, uint32_t num_buckets);
 
 /* Force the database to be sync'd to disk (msync) */
 void springfield_sync(springfield_t *r);
 
+/* Get the average number of seeks on a record hit in the
+   last 100 fetches */
+double springfield_seek_average(springfield_t *r);
+
 /* Close the database; compress=1 means rewrite the database
    to eliminate redundant values for each single key */
-void springfield_close(springfield_t *r, int compress);
+void springfield_close(springfield_t *r, int compress,
+    uint32_t num_buckets);
 
 /* Set `key` to byte array `val` of `vlen` bytes; you still
    own key and val, they are not retained */

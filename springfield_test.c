@@ -7,8 +7,9 @@
 
 #include "springfield.h"
 
-#define COUNT 100000000
+#define COUNT 1000000
 #define DCOUNT ((double)COUNT)
+#define BUCKETS (1024 * 120)
 
 double doublenow() {
     struct timeval tv;
@@ -22,7 +23,7 @@ int main() {
     double start;
     printf("-- load --\n");
     start = doublenow();
-    springfield_t *db = springfield_create("db");
+    springfield_t *db = springfield_create("db", BUCKETS);
     printf("load took %.3f\n",
     doublenow() - start);
 
@@ -49,12 +50,16 @@ int main() {
         char *p = (char *)springfield_get(db, buf2, &sz);
         assert(p && !strcmp(buf2, p));
         free(p);
-        if (i % 100000 == 0)
+        if (i % 100000 == 0) {
             printf("%d\n", i);
+            printf("current seek average: %.1f\n",
+            springfield_seek_average(db));
+        }
     }
     final = doublenow();
     printf("read took %.3f (%.3f/s)\n",
     final - start, DCOUNT / (final - start));
+
 
     snprintf(buf2, 8, "%d", 4);
     char *p = (char *)springfield_get(db, buf2, &sz);
@@ -64,7 +69,7 @@ int main() {
     p = (char *)springfield_get(db, buf2, &sz);
     assert(!p);
 
-    springfield_close(db, 1);
+    springfield_close(db, 1, BUCKETS);
 
     return 0;
 }

@@ -33,12 +33,15 @@ typedef struct springfield_header_v1 {
 
 
 struct springfield_t {
-    uint64_t offsets[NUMBUCKETS];
+    uint32_t num_buckets;
+    uint64_t *offsets;
     int mapfd;
     char *path;
     uint8_t *map;
     uint64_t mmap_alloc;
     uint64_t eof;
+    uint32_t seeks[100];
+    int seek_pos;
 };
 
 #define HEADER_SIZE (sizeof(springfield_header_v1))
@@ -54,12 +57,12 @@ static uint32_t crc32(uint32_t crc, uint8_t *buf, int len);
 #define hash jenkins_one_at_a_time_hash
 
 static uint64_t springfield_index_lookup(springfield_t *r, char *key) {
-    uint32_t fh = hash(key, strlen(key)) % NUMBUCKETS;
+    uint32_t fh = hash(key, strlen(key)) % r->num_buckets;
     return r->offsets[fh];
 }
 
 static uint64_t springfield_index_keyval(springfield_t *r, char *key, uint64_t off) {
-    uint32_t fh = hash(key, strlen(key)) % NUMBUCKETS;
+    uint32_t fh = hash(key, strlen(key)) % r->num_buckets;
 
     uint64_t last = r->offsets[fh];
     r->offsets[fh] = off;
@@ -77,58 +80,58 @@ static void springfield_load(springfield_t *r) {
 
     int s = fstat(r->mapfd, &st);
     if (!s) {
-        r->eof = st.st_size;
-    }
-    else {
-        r->eof = 0;
+        r->eof = st.st_size >= 4 ? st.st_size : 0;
     }
 
     r->map = NULL;
 
-    int i = 0;
-    if (r->eof) {
+    if (!r->eof) {
+        r->offsets = malloc(r->num_buckets * sizeof(uint64_t));
+        memset(r->offsets, 0xff, r->num_buckets * sizeof(uint64_t));
+
+    } else {
         r->mmap_alloc = r->eof;
         r->map = (uint8_t *)mmap(
             NULL, r->mmap_alloc, PROT_READ, MAP_PRIVATE, r->mapfd, 0);
         assert(r->map);
 
         uint8_t *p = r->map;
-        uint64_t off = 0;
+
+        r->num_buckets = *(uint32_t *)p;
+        r->offsets = malloc(r->num_buckets * sizeof(uint64_t));
+        memset(r->offsets, 0xff, r->num_buckets * sizeof(uint64_t));
+
+        uint64_t off = 4;
+        p += 4;
+
         while (1) {
-            i++;
             if (off + 8 > r->eof) {
-                printf("break 1\n");
                 r->eof = off;
                 break;
             }
             springfield_header_v1 *h = (springfield_header_v1 *)p;
             if (h->version == 0) {
-                printf("break 2\n");
                 r->eof = off;
                 break;
             }
             assert(h->version == 1);
             if (off + HEADER_SIZE > r->eof) {
-                printf("break 3\n");
                 r->eof = off;
                 break;
             }
             if (h->klen == 0) {
-                printf("break 4\n");
                 r->eof = off;
                 break;
             }
             assert(h->vlen <= MAX_VLEN);
             uint32_t jump = h->vlen + h->klen + HEADER_SIZE;
             if (off + jump > r->eof) {
-                printf("break 5\n");
                 r->eof = off;
                 break;
             }
 
             /* Check CRC32 */
             if (crc32(0, p + 4, HEADER_SIZE_MINUS_CRC + h->klen + h->vlen) != h->crc) {
-                printf("break crc\n");
                 r->eof = off;
                 break;
             }
@@ -145,8 +148,6 @@ static void springfield_load(springfield_t *r) {
         munmap(r->map, r->mmap_alloc);
     }
 
-    printf("loaded: %d\n", i);
-
     r->mmap_alloc = r->eof + MMAP_OVERFLOW;
     s = ftruncate(r->mapfd, (off_t)r->mmap_alloc);
     assert(!s);
@@ -154,16 +155,25 @@ static void springfield_load(springfield_t *r) {
     r->map = (uint8_t *)mmap(
         NULL, r->mmap_alloc, PROT_READ | PROT_WRITE, MAP_SHARED, r->mapfd, 0);
 
+    uint32_t buckets_on_record = *(uint32_t *)r->map;
+    if (buckets_on_record) {
+        assert(buckets_on_record == r->num_buckets);
+    } else {
+        *(uint32_t *)r->map = r->num_buckets;
+        assert(r->eof == 0);
+        r->eof = 4;
+    }
+
     assert(r->map);
 }
 
-springfield_t * springfield_create(char *path) {
+springfield_t * springfield_create(char *path, uint32_t num_buckets) {
     assert(sizeof(void *) == 8); // Springfield needs 64-bit system
     springfield_t *r = calloc(1, sizeof(springfield_t));
+    r->num_buckets = num_buckets;
     r->path = malloc(strlen(path) + 1);
     strcpy(r->path, path);
     r->mmap_alloc = 0;
-    memset(r->offsets, 0xff, NUMBUCKETS * sizeof(uint64_t));
 
     springfield_load(r);
 
@@ -173,10 +183,16 @@ springfield_t * springfield_create(char *path) {
 uint8_t * springfield_get(springfield_t *r, char *key, uint32_t *len) {
     uint64_t off = springfield_index_lookup(r, key);
 
+    int seeks = 0;
     while (off != NO_BACKTRACE) {
+        ++seeks;
         uint8_t *p = &r->map[off];
         springfield_header_v1 *h = (springfield_header_v1 *)p;
         if (!strncmp((char *)(p + HEADER_SIZE), key, h->klen)) {
+            r->seeks[r->seek_pos] = seeks;
+            if (++r->seek_pos == 100) {
+                r->seek_pos = 0;
+            }
             if (h->vlen == 0) {
                 return NULL;
             }
@@ -189,6 +205,15 @@ uint8_t * springfield_get(springfield_t *r, char *key, uint32_t *len) {
     }
 
     return NULL;
+}
+
+double springfield_seek_average(springfield_t *r) {
+    double tot = 0;
+    int i;
+    for(i=0; i < 100; i++) {
+        tot += r->seeks[i];
+    }
+    return tot / 100.0;
 }
 
 void springfield_sync(springfield_t *r) {
@@ -249,7 +274,7 @@ void springfield_iter(springfield_t *r, springfield_iter_cb cb, void *passthroug
 
     int sl = 10 * 1024;
     char *s = realloc(NULL, sl);
-    for (i = 0; i < NUMBUCKETS; i++) {
+    for (i = 0; i < r->num_buckets; i++) {
         uint64_t search_off = 0;
         s[0] = 0;
         uint64_t off = r->offsets[i];
@@ -288,16 +313,17 @@ static void springfield_rewrite_cb(springfield_t *r, char *key, uint8_t *data, u
     springfield_set(new, key, data, length);
 }
 
-void springfield_close(springfield_t *r, int compress) {
+void springfield_close(springfield_t *r, int compress, uint32_t num_buckets) {
     char path[1200] = {0};
     if (compress) {
         assert(strlen(r->path) < 1100);
         strcat(path, r->path);
         strcat(path, ".springfield_rewrite");
 
-        springfield_t *tmp = springfield_create(path);
+        springfield_t *tmp = springfield_create(path, num_buckets ?
+            num_buckets : r->num_buckets);
         springfield_iter(r, springfield_rewrite_cb, (void *)tmp);
-        springfield_close(tmp, 0);
+        springfield_close(tmp, 0, 0);
     }
 
     munmap(r->map, r->mmap_alloc);
@@ -308,6 +334,7 @@ void springfield_close(springfield_t *r, int compress) {
     }
 
     free(r->path);
+    free(r->offsets);
     free(r);
 }
 
