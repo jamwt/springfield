@@ -5,9 +5,9 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#include "rolla.h"
+#include "springfield.h"
 
-#define COUNT 1000000
+#define COUNT 100000000
 #define DCOUNT ((double)COUNT)
 
 double doublenow() {
@@ -22,7 +22,7 @@ int main() {
     double start;
     printf("-- load --\n");
     start = doublenow();
-    rolla *db = rolla_create("db");
+    springfield_t *db = springfield_create("db");
     printf("load took %.3f\n",
     doublenow() - start);
 
@@ -33,7 +33,7 @@ int main() {
     start = doublenow();
     for (i=0; i < COUNT; i++) {
         snprintf(buf2, 8, "%d", i % 2 ? i : 4);
-        rolla_set(db, buf2, (uint8_t *)buf2, 8);
+        springfield_set(db, buf2, (uint8_t *)buf2, 8);
     }
     double final;
     final = doublenow();
@@ -46,7 +46,7 @@ int main() {
     start = doublenow();
     for (i=0; i < COUNT; i++) {
         snprintf(buf2, 8, "%d", i % 2 ? i : 4);
-        char *p = (char *)rolla_get(db, buf2, &sz);
+        char *p = (char *)springfield_get(db, buf2, &sz);
         assert(p && !strcmp(buf2, p));
         free(p);
         if (i % 100000 == 0)
@@ -57,14 +57,14 @@ int main() {
     final - start, DCOUNT / (final - start));
 
     snprintf(buf2, 8, "%d", 4);
-    char *p = (char *)rolla_get(db, buf2, &sz);
+    char *p = (char *)springfield_get(db, buf2, &sz);
     assert(p);
     free(p);
-    rolla_del(db, buf2);
-    p = (char *)rolla_get(db, buf2, &sz);
+    springfield_del(db, buf2);
+    p = (char *)springfield_get(db, buf2, &sz);
     assert(!p);
 
-    rolla_close(db, 1);
+    springfield_close(db, 1);
 
     return 0;
 }
