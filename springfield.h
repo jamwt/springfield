@@ -18,12 +18,15 @@ void springfield_sync(springfield_t *r);
    last 100 fetches */
 double springfield_seek_average(springfield_t *r);
 
+/* Get the current bucket count */
+double springfield_bucket_count(springfield_t *r);
+
 /* Close the database */
 void springfield_close(springfield_t *r);
 
 /* Rewrite the database to eliminate redundant values,
    and potentially expand/contract # of buckets */
-void springfield_compress(springfield_t *r, uint32_t num_buckets);
+void springfield_compact(springfield_t *r, uint32_t num_buckets);
 
 /* Set `key` to byte array `val` of `vlen` bytes; you still
    own key and val, they are not retained */

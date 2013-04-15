@@ -89,6 +89,10 @@ static uint64_t springfield_index_keyval(springfield_t *r, char *key, uint64_t o
     return last;
 }
 
+double springfield_bucket_count(springfield_t *r) {
+    return r->num_buckets;
+}
+
 static void springfield_load(springfield_t *r) {
 
     struct stat st;
@@ -375,7 +379,7 @@ static void springfield_rewrite_cb(springfield_t *r, char *key, void *pass) {
    free(data);
 }
 
-void springfield_compress(springfield_t *r, uint32_t num_buckets) {
+void springfield_compact(springfield_t *r, uint32_t num_buckets) {
     char path[1200] = {0};
     pthread_mutex_lock(&r->iter_lock);
 

@@ -13,12 +13,9 @@ use the same `NUM_BUCKETS` every time with a given db
 file.
 
 Springfield is fully thread-safe.  In fact,
-You can also compress and "upgrade" the db to
+You can also compact and "upgrade" the db to
 higher bucket count while remaining online to get your 
 performance back when the keyspace grows.  
-(use `springfield_seek_average()`
-to get back a heuristic that can help inform when it's time
-to close/compress/resize)
 
 Springfield also uses CRC sums to validate data
 integrity of keys/values on disk.
