@@ -387,7 +387,7 @@ void springfield_compress(springfield_t *r, uint32_t num_buckets) {
     springfield_t *tmp = springfield_create(path, num_buckets ?
        num_buckets : r->num_buckets);
 
-    /* set up "start rewrite" mode */
+    /* set up "rewrite" mode */
     pthread_rwlock_wrlock(&r->main_lock);
     r->in_rewrite = 1;
     r->rewrite_keys = NULL;
@@ -404,6 +404,7 @@ void springfield_compress(springfield_t *r, uint32_t num_buckets) {
 
         uint32_t length;
         uint8_t *data = springfield_get_i(r, key->key, &length);
+        /* Note: incl' delete (which is set NULL) */
         springfield_set_i(tmp, key->key, data, length);
         free(data);
         HASH_DEL(r->rewrite_keys, key);
