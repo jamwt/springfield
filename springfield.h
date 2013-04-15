@@ -39,7 +39,7 @@ void springfield_del(springfield_t *r, char *key);
 
 /* Iterate over all keys in the database.  See the note in the
    README.md about caveats associated with iteration and mutation */
-typedef void(*springfield_iter_cb) (springfield_t *r, char *key, uint8_t *val, uint32_t length, void *passthrough);
+typedef void(*springfield_iter_cb) (springfield_t *r, char *key, void *passthrough);
 void springfield_iter(springfield_t *r, springfield_iter_cb cb, void *passthrough);
 
 #endif /* SPRINGFIELD_H */

@@ -20,6 +20,7 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +28,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#include "uthash.h"
 
 typedef struct springfield_header_v1 {
     uint32_t crc;
@@ -39,7 +42,6 @@ typedef struct springfield_header_v1 {
     uint64_t last;
 } springfield_header_v1;
 
-
 struct springfield_t {
     uint32_t num_buckets;
     uint64_t *offsets;
@@ -50,7 +52,14 @@ struct springfield_t {
     uint64_t eof;
     uint32_t seeks[100];
     int seek_pos;
+    pthread_rwlock_t main_lock;
+    pthread_mutex_t iter_lock;
 };
+
+typedef struct springfield_key_t {
+    char *key;
+    UT_hash_handle hh;
+} springfield_key_t;
 
 #define HEADER_SIZE (sizeof(springfield_header_v1))
 #define HEADER_SIZE_MINUS_CRC (sizeof(springfield_header_v1) - 4)
@@ -183,12 +192,19 @@ springfield_t * springfield_create(char *path, uint32_t num_buckets) {
     strcpy(r->path, path);
     r->mmap_alloc = 0;
 
+    pthread_rwlockattr_t attr;
+    pthread_rwlockattr_init(&attr);
+    int res = pthread_rwlockattr_setkind_np(&attr, PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+    assert(!res);
+    pthread_rwlock_init(&r->main_lock, &attr);
+    pthread_mutex_init(&r->iter_lock, NULL);
+
     springfield_load(r);
 
     return r;
 }
 
-uint8_t * springfield_get(springfield_t *r, char *key, uint32_t *len) {
+static uint8_t * springfield_get_i(springfield_t *r, char *key, uint32_t *len) {
     uint64_t off = springfield_index_lookup(r, key);
 
     int seeks = 0;
@@ -215,6 +231,13 @@ uint8_t * springfield_get(springfield_t *r, char *key, uint32_t *len) {
     return NULL;
 }
 
+uint8_t * springfield_get(springfield_t *r, char *key, uint32_t *len) {
+    pthread_rwlock_rdlock(&r->main_lock);
+    uint8_t *res = springfield_get_i(r, key, len);
+    pthread_rwlock_unlock(&r->main_lock);
+    return res;
+}
+
 double springfield_seek_average(springfield_t *r) {
     double tot = 0;
     int i;
@@ -225,11 +248,13 @@ double springfield_seek_average(springfield_t *r) {
 }
 
 void springfield_sync(springfield_t *r) {
+    pthread_rwlock_rdlock(&r->main_lock);
     int s = msync(r->map, r->mmap_alloc, MS_SYNC);
+    pthread_rwlock_unlock(&r->main_lock);
     assert(!s);
 }
 
-void springfield_set(springfield_t *r, char *key, uint8_t *val, uint32_t vlen) {
+static void springfield_set_i(springfield_t *r, char *key, uint8_t *val, uint32_t vlen) {
     uint8_t klen = strlen(key) + 1;
     assert(klen < MAX_KLEN);
     assert(vlen < MAX_VLEN);
@@ -272,66 +297,78 @@ void springfield_set(springfield_t *r, char *key, uint8_t *val, uint32_t vlen) {
 
     r->eof += step;
 }
+void springfield_set(springfield_t *r, char *key, uint8_t *val, uint32_t vlen) {
+    pthread_rwlock_wrlock(&r->main_lock);
+    springfield_set_i(r, key, val, vlen);
+    pthread_rwlock_unlock(&r->main_lock);
+}
 
 void springfield_del(springfield_t *r, char *key) {
     springfield_set(r, key, NULL, 0);
 }
 
-void springfield_iter(springfield_t *r, springfield_iter_cb cb, void *passthrough) {
+static void springfield_iter_i(springfield_t *r, springfield_iter_cb cb, void *passthrough) {
+    /* Copy into temporary buffer */
     int i;
-
-    int sl = 10 * 1024;
-    char *s = realloc(NULL, sl);
     for (i = 0; i < r->num_buckets; i++) {
-        uint64_t search_off = 0;
-        s[0] = 0;
         uint64_t off = r->offsets[i];
-        char buf[MAX_KLEN + 2];
-        buf[0] = 1;
+        springfield_key_t *key = NULL, *tmp = NULL;
+        springfield_key_t *keys = NULL;
+        pthread_rwlock_rdlock(&r->main_lock);
         while (off != NO_BACKTRACE) {
             springfield_header_v1 *h = (springfield_header_v1 *)(r->map + off);
-            char *key = (char *)(r->map + off + HEADER_SIZE);
-            strcpy(buf + 1, key);
-            buf[h->klen] = 1;
-            buf[h->klen + 1] = 0;
-            uint32_t skey_len = h->klen + 2;
-            if (!strstr(s, buf)) {
+            int klen = h->klen - 1;
+            char *keyptr = (char *)(r->map + off + HEADER_SIZE);
+            HASH_FIND(hh, keys, keyptr, klen, key);
+            uint64_t last = h->last;
+            if (!key) {
                 /* not found */
-                if (h->vlen) {
-                    uint8_t *val = (uint8_t *)(r->map + off + h->klen + HEADER_SIZE);
-                    cb(r, key, val, h->vlen, passthrough);
+                key = calloc(1, sizeof(springfield_key_t));
+                key->key = strdup(keyptr);
+                int do_callback = h->vlen > 0;
+                if (do_callback) {
+                    pthread_rwlock_unlock(&r->main_lock);
+                    cb(r, key->key, passthrough);
+                    pthread_rwlock_rdlock(&r->main_lock);
                 }
-                if (search_off + skey_len >= sl) {
-                    sl *= 2;
-                    s = realloc(s, sl);
-                }
-                strcpy(s + search_off, buf);
-                search_off += skey_len - 1; /* trailing \0 */
+                /* set in hash */
+                HASH_ADD_KEYPTR(hh, keys, key->key, klen, key);
             }
 
-            off = h->last;
+            off = last;
+        }
+        pthread_rwlock_unlock(&r->main_lock);
+        /* cleanup keys XXX */
+        HASH_ITER(hh, keys, key, tmp) {
+            HASH_DEL(keys, key);
+            free(key->key);
+            free(key);
         }
     }
-
-    free(s);
 }
 
-static void springfield_rewrite_cb(springfield_t *r, char *key, uint8_t *data, uint32_t length, void *pass) {
-    springfield_t *new = (springfield_t *)pass;
-    springfield_set(new, key, data, length);
+void springfield_iter(springfield_t *r, springfield_iter_cb cb, void *passthrough) {
+    pthread_mutex_lock(&r->iter_lock);
+    springfield_iter_i(r, cb, passthrough);
+    pthread_mutex_unlock(&r->iter_lock);
 }
+
+/*static void springfield_rewrite_cb(springfield_t *r, char *key, uint8_t *data, uint32_t length, void *pass) {*/
+/*    springfield_t *new = (springfield_t *)pass;*/
+/*    springfield_set(new, key, data, length);*/
+/*}*/
 
 void springfield_close(springfield_t *r, int compress, uint32_t num_buckets) {
     char path[1200] = {0};
     if (compress) {
-        assert(strlen(r->path) < 1100);
-        strcat(path, r->path);
-        strcat(path, ".springfield_rewrite");
+        /*assert(strlen(r->path) < 1100);*/
+        /*strcat(path, r->path);*/
+        /*strcat(path, ".springfield_rewrite");*/
 
-        springfield_t *tmp = springfield_create(path, num_buckets ?
-            num_buckets : r->num_buckets);
-        springfield_iter(r, springfield_rewrite_cb, (void *)tmp);
-        springfield_close(tmp, 0, 0);
+        /*springfield_t *tmp = springfield_create(path, num_buckets ?*/
+        /*    num_buckets : r->num_buckets);*/
+        /*springfield_iter(r, springfield_rewrite_cb, (void *)tmp);*/
+        /*springfield_close(tmp, 0, 0);*/
     }
 
     munmap(r->map, r->mmap_alloc);
