@@ -12,9 +12,11 @@ so you don't need to walk on eggshells making sure you
 use the same `NUM_BUCKETS` every time with a given db
 file.
 
-You can also "upgrade" the db file to a higher bucket
-count when you close/compress to get your performance
-back when the keyspace grows.  (use `springfield_seek_average()`
+Springfield is fully thread-safe.  In fact,
+You can also compress and "upgrade" the db to
+higher bucket count while remaining online to get your 
+performance back when the keyspace grows.  
+(use `springfield_seek_average()`
 to get back a heuristic that can help inform when it's time
 to close/compress/resize)
 
