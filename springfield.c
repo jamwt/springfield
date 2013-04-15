@@ -42,6 +42,11 @@ typedef struct springfield_header_v1 {
     uint64_t last;
 } springfield_header_v1;
 
+typedef struct springfield_key_t {
+    char *key;
+    UT_hash_handle hh;
+} springfield_key_t;
+
 struct springfield_t {
     uint32_t num_buckets;
     uint64_t *offsets;
@@ -54,12 +59,9 @@ struct springfield_t {
     int seek_pos;
     pthread_rwlock_t main_lock;
     pthread_mutex_t iter_lock;
+    int in_rewrite;
+    springfield_key_t *rewrite_keys;
 };
-
-typedef struct springfield_key_t {
-    char *key;
-    UT_hash_handle hh;
-} springfield_key_t;
 
 #define HEADER_SIZE (sizeof(springfield_header_v1))
 #define HEADER_SIZE_MINUS_CRC (sizeof(springfield_header_v1) - 4)
@@ -265,6 +267,16 @@ static void springfield_set_i(springfield_t *r, char *key, uint8_t *val, uint32_
     h.vlen = vlen;
     h.version = 1;
 
+    if (r->in_rewrite) {
+        springfield_key_t *kobj = NULL;
+        HASH_FIND(hh, r->rewrite_keys, key, klen, kobj);
+        if (!kobj) {
+            kobj = calloc(1, sizeof(springfield_key_t));
+            kobj->key = strdup(key);
+            HASH_ADD_KEYPTR(hh, r->rewrite_keys, key, klen, kobj);
+        }
+    }
+
     if (r->eof + step > r->mmap_alloc) {
         msync(r->map, r->mmap_alloc, MS_SYNC);
         int s = munmap(r->map, r->mmap_alloc);
@@ -353,29 +365,80 @@ void springfield_iter(springfield_t *r, springfield_iter_cb cb, void *passthroug
     pthread_mutex_unlock(&r->iter_lock);
 }
 
-/*static void springfield_rewrite_cb(springfield_t *r, char *key, uint8_t *data, uint32_t length, void *pass) {*/
-/*    springfield_t *new = (springfield_t *)pass;*/
-/*    springfield_set(new, key, data, length);*/
-/*}*/
+static void springfield_rewrite_cb(springfield_t *r, char *key, void *pass) {
+   springfield_t *new = (springfield_t *)pass;
+   uint32_t length;
+   uint8_t *data = springfield_get(r, key, &length);
+   if (data) {
+       springfield_set_i(new, key, data, length);
+   }
+   free(data);
+}
 
-void springfield_close(springfield_t *r, int compress, uint32_t num_buckets) {
+void springfield_compress(springfield_t *r, uint32_t num_buckets) {
     char path[1200] = {0};
-    if (compress) {
-        /*assert(strlen(r->path) < 1100);*/
-        /*strcat(path, r->path);*/
-        /*strcat(path, ".springfield_rewrite");*/
+    pthread_mutex_lock(&r->iter_lock);
 
-        /*springfield_t *tmp = springfield_create(path, num_buckets ?*/
-        /*    num_buckets : r->num_buckets);*/
-        /*springfield_iter(r, springfield_rewrite_cb, (void *)tmp);*/
-        /*springfield_close(tmp, 0, 0);*/
+    assert(strlen(r->path) < 1100);
+
+    strcat(path, r->path);
+    strcat(path, ".springfield_rewrite");
+
+    springfield_t *tmp = springfield_create(path, num_buckets ?
+       num_buckets : r->num_buckets);
+
+    /* set up "start rewrite" mode */
+    pthread_rwlock_wrlock(&r->main_lock);
+    r->in_rewrite = 1;
+    r->rewrite_keys = NULL;
+    pthread_rwlock_unlock(&r->main_lock);
+
+    springfield_iter_i(r, springfield_rewrite_cb, (void *)tmp);
+
+    /* tear down "rewrite" mode */
+    pthread_rwlock_wrlock(&r->main_lock);
+
+    r->in_rewrite = 0;
+    springfield_key_t *key, *ktmp;
+    HASH_ITER(hh, r->rewrite_keys, key, ktmp) {
+
+        uint32_t length;
+        uint8_t *data = springfield_get_i(r, key->key, &length);
+        springfield_set_i(tmp, key->key, data, length);
+        free(data);
+        HASH_DEL(r->rewrite_keys, key);
+        free(key->key);
+        free(key);
     }
-
+    r->rewrite_keys = NULL;
+    r->num_buckets = tmp->num_buckets;
     munmap(r->map, r->mmap_alloc);
     close(r->mapfd);
+    r->mapfd = tmp->mapfd;
+    r->map = tmp->map;
+    r->mmap_alloc = tmp->mmap_alloc;
+    r->eof = tmp->eof;
 
-    if (compress) {
-        rename(path, r->path);
+    free(r->offsets);
+    r->offsets = tmp->offsets;
+
+    tmp->map = NULL;
+    tmp->mapfd = -1;
+    tmp->offsets = NULL;
+
+    rename(path, r->path);
+
+    pthread_rwlock_unlock(&r->main_lock);
+
+    springfield_close(tmp);
+
+    pthread_mutex_unlock(&r->iter_lock);
+}
+
+void springfield_close(springfield_t *r) {
+    if (r->map) {
+        munmap(r->map, r->mmap_alloc);
+        close(r->mapfd);
     }
 
     free(r->path);
