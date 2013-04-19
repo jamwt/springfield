@@ -118,6 +118,9 @@ static void springfield_load(springfield_t *r) {
             NULL, r->mmap_alloc, PROT_READ, MAP_PRIVATE, r->mapfd, 0);
         assert(r->map);
 
+        s = madvise(r->map, r->mmap_alloc, MADV_SEQUENTIAL);
+        assert(!s);
+
         uint8_t *p = r->map;
 
         r->num_buckets = *(uint32_t *)p;
@@ -177,6 +180,8 @@ static void springfield_load(springfield_t *r) {
 
     r->map = (uint8_t *)mmap(
         NULL, r->mmap_alloc, PROT_READ | PROT_WRITE, MAP_SHARED, r->mapfd, 0);
+    s = madvise(r->map, r->mmap_alloc, MADV_RANDOM);
+    assert(!s);
 
     uint32_t buckets_on_record = *(uint32_t *)r->map;
     if (buckets_on_record) {
@@ -286,16 +291,14 @@ static void springfield_set_i(springfield_t *r, char *key, uint8_t *val, uint32_
         int s = munmap(r->map, r->mmap_alloc);
         assert(!s);
         uint64_t new_size = r->mmap_alloc + ((r->eof + step) * 2);
-        if (new_size > UINT_MAX) {
-            assert(r->mmap_alloc != UINT_MAX);
-            new_size = UINT_MAX;
-        }
         r->mmap_alloc = new_size;
         s = ftruncate(r->mapfd, (off_t)r->mmap_alloc);
         assert(!s);
         r->map = (uint8_t *)mmap(
             NULL, r->mmap_alloc, PROT_READ | PROT_WRITE, MAP_SHARED, r->mapfd, 0);
         /* TODO mremap() on linux */
+        s = madvise(r->map, r->mmap_alloc, MADV_RANDOM);
+        assert(!s);
     }
 
     h.last = springfield_index_keyval(r, key, r->eof);
