@@ -33,3 +33,11 @@ bug/race in online compaction, but everything else
 seems to work fine.
 
 Still, don't use it in production, yet!
+
+Performance
+-----------
+
+It is pretty fast on SSDs.  It outperforms
+Tokyo Cabinet's TCHDB on most workloads, and
+often by a wide margin as key counts and db
+sizes go up.
