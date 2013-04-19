@@ -266,7 +266,7 @@ void springfield_sync(springfield_t *r) {
 }
 
 static void springfield_set_i(springfield_t *r, char *key, uint8_t *val, uint32_t vlen) {
-    uint8_t klen = strlen(key) + 1;
+    int klen = strlen(key) + 1;
     assert(klen < MAX_KLEN);
     assert(vlen < MAX_VLEN);
 
