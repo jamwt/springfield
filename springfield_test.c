@@ -109,10 +109,10 @@ int main() {
     p = (char *)springfield_get(db, buf2, &sz);
     assert(!p);
 
+    void *vres;
+
     pthread_join(t, &vres);
     springfield_close(db);
-
-    void *vres;
 
     return 0;
 }
