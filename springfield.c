@@ -224,10 +224,7 @@ static uint8_t * springfield_get_i(springfield_t *r, char *key, uint32_t *len) {
         uint8_t *p = &r->map[off];
         springfield_header_v1 *h = (springfield_header_v1 *)p;
         if (!strncmp((char *)(p + HEADER_SIZE), key, h->klen)) {
-            r->seeks[r->seek_pos] = seeks;
-            if (++r->seek_pos == 100) {
-                r->seek_pos = 0;
-            }
+            r->seeks[(++r->seek_pos) % 100] = seeks;
             if (h->vlen == 0) {
                 return NULL;
             }
