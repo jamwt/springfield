@@ -28,11 +28,8 @@ integrity of keys/values on disk.
 Status
 ------
 
-Springfield is alpha.  There is at least one known
-bug/race in online compaction, but everything else
-seems to work fine.
-
-Still, don't use it in production, yet!
+Springfield is beta.  No known bugs, but it hasn't
+been used heavily in production yet.
 
 Performance
 -----------

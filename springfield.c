@@ -224,7 +224,14 @@ static uint8_t * springfield_get_i(springfield_t *r, char *key, uint32_t *len) {
         uint8_t *p = &r->map[off];
         springfield_header_v1 *h = (springfield_header_v1 *)p;
         if (!strncmp((char *)(p + HEADER_SIZE), key, h->klen)) {
-            r->seeks[(++r->seek_pos) % 100] = seeks;
+            int seek_ind = __sync_fetch_and_add(&r->seek_pos, 1);
+            uint32_t *addr = &(r->seeks[seek_ind % 100]);
+            int ok;
+            do {
+                ok = __sync_bool_compare_and_swap(
+                    addr, *addr, seeks);
+            } while (!ok);
+
             if (h->vlen == 0) {
                 return NULL;
             }
