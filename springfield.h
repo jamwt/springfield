@@ -47,4 +47,7 @@ void springfield_del(springfield_t *r, char *key);
 typedef void(*springfield_iter_cb) (springfield_t *r, char *key, void *passthrough);
 void springfield_iter(springfield_t *r, springfield_iter_cb cb, void *passthrough);
 
+typedef void(*springfield_readonly_iter_cb) (springfield_t *r, char *key, uint8_t *val, uint32_t len, void *passthrough);
+void springfield_readonly_iter(springfield_t *r, springfield_readonly_iter_cb cb, void *passthrough);
+
 #endif /* SPRINGFIELD_H */

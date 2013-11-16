@@ -330,8 +330,14 @@ void springfield_del(springfield_t *r, char *key) {
     springfield_set(r, key, NULL, 0);
 }
 
-static void springfield_iter_i(springfield_t *r, springfield_iter_cb cb, void *passthrough) {
+static void springfield_iter_i(springfield_t *r, springfield_iter_cb cb,
+        springfield_readonly_iter_cb rocb, void *passthrough) {
     /* Copy into temporary buffer */
+    if (cb) {
+        assert(!rocb);
+    } else {
+        assert(rocb);
+    }
     int i;
     for (i = 0; i < r->num_buckets; i++) {
         uint64_t off = r->offsets[i];
@@ -350,9 +356,17 @@ static void springfield_iter_i(springfield_t *r, springfield_iter_cb cb, void *p
                 key->key = strdup(keyptr);
                 int do_callback = h->vlen > 0;
                 if (do_callback) {
-                    pthread_rwlock_unlock(&r->main_lock);
-                    cb(r, key->key, passthrough);
-                    pthread_rwlock_rdlock(&r->main_lock);
+                    if (cb) {
+                        pthread_rwlock_unlock(&r->main_lock);
+                        cb(r, key->key, passthrough);
+                        pthread_rwlock_rdlock(&r->main_lock);
+                    } else {
+                        pthread_rwlock_unlock(&r->main_lock);
+                        rocb(r, key->key,
+                            r->map + off + HEADER_SIZE + h->klen,
+                            h->vlen, passthrough);
+                        pthread_rwlock_rdlock(&r->main_lock);
+                    }
                 }
                 /* set in hash */
                 HASH_ADD_KEYPTR(hh, keys, key->key, klen, key);
@@ -372,18 +386,21 @@ static void springfield_iter_i(springfield_t *r, springfield_iter_cb cb, void *p
 
 void springfield_iter(springfield_t *r, springfield_iter_cb cb, void *passthrough) {
     pthread_mutex_lock(&r->iter_lock);
-    springfield_iter_i(r, cb, passthrough);
+    springfield_iter_i(r, cb, NULL, passthrough);
     pthread_mutex_unlock(&r->iter_lock);
 }
 
-static void springfield_rewrite_cb(springfield_t *r, char *key, void *pass) {
+void springfield_readonly_iter(springfield_t *r, springfield_readonly_iter_cb cb, void *passthrough) {
+    pthread_mutex_lock(&r->iter_lock);
+    springfield_iter_i(r, NULL, cb, passthrough);
+    pthread_mutex_unlock(&r->iter_lock);
+}
+
+static void springfield_rewrite_cb(springfield_t *r, char *key, uint8_t *data,
+        uint32_t length, void *pass)
+{
    springfield_t *new = (springfield_t *)pass;
-   uint32_t length;
-   uint8_t *data = springfield_get(r, key, &length);
-   if (data) {
-       springfield_set_i(new, key, data, length);
-   }
-   free(data);
+   springfield_set_i(new, key, data, length);
 }
 
 void springfield_compact(springfield_t *r, uint32_t num_buckets) {
@@ -404,7 +421,7 @@ void springfield_compact(springfield_t *r, uint32_t num_buckets) {
     r->rewrite_keys = NULL;
     pthread_rwlock_unlock(&r->main_lock);
 
-    springfield_iter_i(r, springfield_rewrite_cb, (void *)tmp);
+    springfield_iter_i(r, NULL, springfield_rewrite_cb, (void *)tmp);
 
     /* tear down "rewrite" mode */
     pthread_rwlock_wrlock(&r->main_lock);
